@@ -12,48 +12,63 @@ const pendingMessages = {
 };
 
 async function start() {
-  const connection = await amqp.connect("amqp://localhost");
-  const channel = await connection.createChannel();
+  try {
+    const connection = await amqp.connect("amqp://localhost");
+    const channel = await connection.createChannel();
 
-  await channel.assertQueue(QUEUE_USER);
-  await channel.assertQueue(QUEUE_MATERIAL);
+    await assertQueues(channel);
+    consumeMessages(channel);
 
-  // Konsumer untuk data user
-  channel.consume(QUEUE_USER, (msg) => {
-    if (msg !== null) {
-      handleUserMessage(msg, channel);
-    }
+    console.log("Transaction Service started");
+  } catch (error) {
+    console.error("Failed to start the service:", error);
+  }
+}
+
+async function assertQueues(channel) {
+  await channel.assertQueue(QUEUE_USER, {
+    arguments: { "x-queue-type": "quorum" },
   });
-
-  // Konsumer untuk data material
-  channel.consume(QUEUE_MATERIAL, (msg) => {
-    if (msg !== null) {
-      handleMaterialMessage(msg, channel);
-    }
+  await channel.assertQueue(QUEUE_MATERIAL, {
+    arguments: { "x-queue-type": "quorum" },
   });
+}
 
-  console.log("Transaction Service started");
+function consumeMessages(channel) {
+  channel.consume(QUEUE_USER, (msg) => handleUserMessage(msg, channel));
+  channel.consume(QUEUE_MATERIAL, (msg) => handleMaterialMessage(msg, channel));
 }
 
 function handleUserMessage(msg, channel) {
-  console.log("Received user message:", msg.content.toString());
-  userData = JSON.parse(msg.content.toString());
-  pendingMessages.user = msg;
-  processIfReady(channel);
+  if (msg) {
+    console.log("Received user message:", msg.content.toString());
+    userData = JSON.parse(msg.content.toString());
+    pendingMessages.user = msg;
+    processIfReady(channel);
+  }
 }
 
 function handleMaterialMessage(msg, channel) {
-  console.log("Received material message:", msg.content.toString());
-  materialData = JSON.parse(msg.content.toString());
-  pendingMessages.material = msg;
-  processIfReady(channel);
+  if (msg) {
+    console.log("Received material message:", msg.content.toString());
+    materialData = JSON.parse(msg.content.toString());
+    pendingMessages.material = msg;
+    processIfReady(channel);
+  }
 }
 
 function processIfReady(channel) {
+  console.log("User data:", userData);
+  console.log("Material data:", materialData);
+
   if (userData && materialData) {
+    console.log("data lengkap");
     const mergedData = mergeData(userData, materialData);
     sendFinalResponse(mergedData);
     acknowledgeMessages(channel);
+    resetData();
+  } else {
+    console.log("data belum lengkap");
   }
 }
 
@@ -67,15 +82,21 @@ function sendFinalResponse(mergedData) {
 }
 
 function acknowledgeMessages(channel) {
-  console.log("Acknowledging messages...");
   if (pendingMessages.user) {
+    console.log("reset user");
     channel.ack(pendingMessages.user);
     pendingMessages.user = null;
   }
   if (pendingMessages.material) {
     channel.ack(pendingMessages.material);
+    console.log("reset material");
     pendingMessages.material = null;
   }
 }
 
-start().catch(console.error);
+function resetData() {
+  userData = null;
+  materialData = null;
+}
+
+start();
