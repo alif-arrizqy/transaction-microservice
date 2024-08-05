@@ -9,7 +9,9 @@ async function start() {
   const channel = await connection.createChannel();
 
   await channel.assertExchange(EXCHANGE_MATERIAL, "direct");
-  await channel.assertQueue(QUEUE_MATERIAL);
+  await channel.assertQueue(QUEUE_MATERIAL, {
+    arguments: { "x-queue-type": "quorum" }
+  });
   await channel.bindQueue(QUEUE_MATERIAL, EXCHANGE_MATERIAL, "");
 
   channel.consume(QUEUE_MATERIAL, (msg) => {
