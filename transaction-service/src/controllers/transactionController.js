@@ -3,107 +3,83 @@ const { publishMessage } = require("../messaging/publisher");
 const MessageSubscriber = require("../messaging/subscriber");
 const ResponseHelper = require("../response/response");
 
-// const subscriber = new MessageSubscriber();
-const queues = ["trans-material-service", "trans-user-service"];
-const subscriber = new MessageSubscriber(queues);
+const subscriber = new MessageSubscriber();
+
+// user-service
+const queueUserRequest = "queue_user_request";
+
+// user-service
+const queueMaterialRequest = "queue_material_request";
 
 exports.createTransaction = async (req, res) => {
-  let userServiceResponse = null;
-  let materialServiceResponse = null;
-  let responseSent = false;
-  const TIMEOUT = 10000; // 10 seconds timeout
-
   try {
-    // Publish message to user-service
-    await publishMessage("user-service", JSON.stringify(req.body));
-    // Publish message to material-service
+    // user-service
+    // message
+    const msgUser = {
+      vendorId: req.body.vendorId,
+      customerId: req.body.customerId,
+    };
+
+    // Publish message
     await publishMessage(
-      "material-service",
-      JSON.stringify(req.body.materialId)
+      queueUserRequest,
+      JSON.stringify(msgUser)
     );
 
-    // Subscribe to messages from both services
+    // material-service
+    // message
+    const msgMaterial = {
+      materialId: req.body.materialId,
+    };
+
+    // Publish message
+    await publishMessage(
+      queueMaterialRequest,
+      JSON.stringify(msgMaterial),
+    );
+
+    // Subscribe to messages 
     await subscriber.subscribeMessages();
 
-    // Event listener for user-service response
-    const userServiceListener = (message) => {
-      if (message.queue === "trans-user-service") {
-        console.log("Received message from user-service:", message.data);
-        userServiceResponse = message.data;
-        checkAndSendResponse();
-      }
-    };
+    const handleMessage = async (data) => {
+      // error handling
+      if (data.vendor.error && data.customer.error) {
+        return res.status(400).json({ error: "Vendor and Customer not found" });
+      } else if (data.vendor.error || data.customer.error) {
+        return res.status(400).json({ error: data.vendor.error || data.customer.error });
+      } else if (data.material.error) {
+        return res.status(400).json({ error: "Material not found" });
+      } else {
+        const transDate = new Date();
+        const transactionDate = transDate.toISOString().split("T")[0];
 
-    // Event listener for material-service response
-    const materialServiceListener = (message) => {
-      if (message.queue === "trans-material-service") {
-        console.log("Received message from material-service:", message.data);
-        materialServiceResponse = message.data;
-        checkAndSendResponse();
-      }
-    };
-
-    // Attach event listeners
-    subscriber.on("message", userServiceListener);
-    subscriber.on("message", materialServiceListener);
-
-    // Function to check if both responses are received and send the response
-    const checkAndSendResponse = () => {
-      if (userServiceResponse && materialServiceResponse && !responseSent) {
-        console.log("Both responses received, sending response");
-
-        // Save transaction to database
+        // save transaction
         Transaction.create({
           vendorId: req.body.vendorId,
           customerId: req.body.customerId,
           materialId: req.body.materialId,
-          transactionDate: req.body.transactionDate,
+          transactionDate: transactionDate,
         });
 
-        res.status(201).json({
+        const response = {
           statusCode: 201,
-          message: "Transaction created successfully",
+          message: "Transaction created",
           data: {
-            vendor: userServiceResponse.vendor,
-            customer: userServiceResponse.customer,
-            material: materialServiceResponse,
-            transactionDate: req.body.transactionDate
+            vendor: data.vendor,
+            customer: data.customer,
+            material: data.material
           }
-        });
-        responseSent = true;
-
-        // Clean up event listeners
-        subscriber.off("message", userServiceListener);
-        subscriber.off("message", materialServiceListener);
+        };
+        res.status(201).json(response);
       }
-    };
-
-    // Set a timeout to handle delays
-    setTimeout(() => {
-      if (!responseSent) {
-        console.log("Timeout reached, sending partial response");
-        res.status(200).json({
-          statusCode: 200,
-          message: "Transaction created with partial responses",
-          data: {
-            vendor: userServiceResponse ? userServiceResponse.vendor : null,
-            customer: userServiceResponse ? userServiceResponse.customer : null,
-            material: materialServiceResponse ? materialServiceResponse : null,
-            transactionDate: req.body.transactionDate
-          }
-        });
-        responseSent = true;
-
-        // Clean up event listeners
-        subscriber.off("message", userServiceListener);
-        subscriber.off("message", materialServiceListener);
-      }
-    }, TIMEOUT);
+      subscriber.off("message", handleMessage);
+    }
+    
+    subscriber.on("message",handleMessage)
 
   } catch (error) {
     if (!responseSent) {
       res.status(400).json({ error: error.message });
-      responseSent = true;
     }
   }
 };
